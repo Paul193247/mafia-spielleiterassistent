@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 
 // ─── Characters ───────────────────────────────────────────────────────────────
-// party: 0=Dorf(grün) 1=Mafia(rot) 2=Triaden(lila) 3=Solo(blau)
 const CHARS = [
   {
     name: "Bürger",
@@ -41,7 +40,7 @@ const CHARS = [
     group: false,
     party: 0,
     detectEvil: false,
-    desc: "Wie Amor, erscheint jede Nacht",
+    desc: "Erste Nacht wie Amor; folgende Nächte wie Prostituierte",
   },
   {
     name: "Prostituierte",
@@ -157,9 +156,34 @@ const CHARS = [
   },
 ];
 
+// Rollen mit Stark/Schwach-Option
+const STARK_CHARS = [4, 5, 7, 11, 13, 18];
+const STARK_LABEL = {
+  4: {
+    stark: "2× gleiche Person erlaubt",
+    schwach: "2× gleiche Person verboten",
+  },
+  5: {
+    stark: "2× gleiche Person erlaubt",
+    schwach: "2× gleiche Person verboten",
+  },
+  7: {
+    stark: "2× gleiche Person schützen ok",
+    schwach: "2× gleiche Person schützen verboten",
+  },
+  11: {
+    stark: "2× gleiche Person schweigen ok",
+    schwach: "2× gleiche Person schweigen verboten",
+  },
+  13: {
+    stark: "2× gleiche Person markieren ok",
+    schwach: "2× gleiche Person markieren verboten",
+  },
+  18: { stark: "Wacht mit Mafia auf", schwach: "Wacht nicht mit Mafia auf" },
+};
+
 const PARTY_BRIGHT = ["#4a9a6a", "#c04040", "#aa60cc", "#4a7adc"];
 const PARTY_NAMES = ["Das Dorf", "Die Mafia", "Die Triaden", "Eigene Partei"];
-
 const pb = (ri) =>
   ri === null || ri === false || ri === undefined
     ? "var(--text-muted)"
@@ -168,17 +192,15 @@ const pnm = (p) => PARTY_NAMES[p ?? 0];
 const tr = (s, n) => (s && s.length > n ? s.slice(0, n - 1) + "…" : s || "");
 
 // ─── Win Check ────────────────────────────────────────────────────────────────
-// party 3 (solo) players never count toward faction wins
+// Game ends only when truly one faction remains
 function checkWin(g) {
   const { roles, lovers, loversDiffParty } = g;
   const aliveRoles = roles.filter((r) => r !== null && r !== false);
   if (!aliveRoles.length) return "village";
-
   const v = aliveRoles.filter((ri) => CHARS[ri]?.party === 0).length;
   const m = aliveRoles.filter((ri) => CHARS[ri]?.party === 1).length;
   const t = aliveRoles.filter((ri) => CHARS[ri]?.party === 2).length;
 
-  // Lovers win: both alive and last non-solo non-lover players are gone
   if (lovers && loversDiffParty) {
     const [la, lb] = lovers;
     const laAlive = roles[la] !== null && roles[la] !== false;
@@ -195,15 +217,15 @@ function checkWin(g) {
       if (others === 0) return "lovers";
     }
   }
-
+  // Strict: only end when one faction truly alone
   if (m === 0 && t === 0) return "village";
-  if (m > 0 && m >= v + t) return "mafia";
-  if (t > 0 && t >= v + m) return "triaden";
+  if (v === 0 && t === 0 && m > 0) return "mafia";
+  if (v === 0 && m === 0 && t > 0) return "triaden";
   return null;
 }
 
 // ─── Queue Builders ───────────────────────────────────────────────────────────
-function idStep(charIdx, count, g) {
+function idStep(charIdx, count) {
   const c = CHARS[charIdx];
   const label = count > 1 ? `${count}× ` : "";
   return {
@@ -215,7 +237,7 @@ function idStep(charIdx, count, g) {
   };
 }
 
-function buildFN(lc) {
+function buildFN(lc, strengths = {}) {
   const q = [
     {
       type: "msg",
@@ -225,12 +247,11 @@ function buildFN(lc) {
   ];
   const mafCount = (lc[1] || 0) + (lc[13] || 0) + (lc[18] || 0);
 
-  // Kaiser
   if (lc[12]) {
     q.push(idStep(12, lc[12]));
     q.push({ type: "msg", text: "Kaiser schläft ein" });
   }
-  // Mafia group
+  // Mafia — terrorist always reveals in first night
   if (mafCount) {
     q.push({
       type: "msg",
@@ -249,7 +270,6 @@ function buildFN(lc) {
     });
     q.push({ type: "msg", text: "Die Mafia schläft ein" });
   }
-  // Triaden
   if (lc[8]) {
     q.push(idStep(8, lc[8]));
     q.push({
@@ -261,13 +281,11 @@ function buildFN(lc) {
     });
     q.push({ type: "msg", text: "Triaden schlafen ein" });
   }
-  // Der Andere
   for (let k = 0; k < (lc[6] || 0); k++) {
     q.push(idStep(6, 1));
     q.push({ type: "derAndereStatus" });
     q.push({ type: "msg", text: "Der Andere schläft ein" });
   }
-  // Rufmörder marks (before Detektiv)
   if (lc[13]) {
     q.push({
       type: "msg",
@@ -283,7 +301,6 @@ function buildFN(lc) {
     });
     q.push({ type: "msg", text: "Rufmörder schläft ein" });
   }
-  // Amor
   for (let k = 0; k < (lc[3] || 0); k++) {
     q.push(idStep(3, 1));
     q.push({
@@ -295,12 +312,18 @@ function buildFN(lc) {
     });
     q.push({ type: "msg", text: "Amor schläft ein" });
   }
-  // Wanderamor
+  // Wanderamor — erste Nacht wie Amor
   for (let k = 0; k < (lc[4] || 0); k++) {
     q.push(idStep(4, 1));
+    q.push({
+      type: "sel",
+      count: 2,
+      text: "Wanderamor wählt das Liebespaar",
+      sub: "Klicke zwei Personen an.",
+      effect: "amor_couple",
+    });
     q.push({ type: "msg", text: "Wanderamor schläft ein" });
   }
-  // Prostituierte
   for (let k = 0; k < (lc[5] || 0); k++) {
     q.push(idStep(5, 1));
     q.push({
@@ -313,7 +336,6 @@ function buildFN(lc) {
     });
     q.push({ type: "msg", text: "Prostituierte schläft ein" });
   }
-  // Seelenretter
   for (let k = 0; k < (lc[7] || 0); k++) {
     q.push(idStep(7, 1));
     q.push({
@@ -325,7 +347,6 @@ function buildFN(lc) {
     });
     q.push({ type: "msg", text: "Seelenretter schläft ein" });
   }
-  // Detektiv
   for (let k = 0; k < (lc[2] || 0); k++) {
     q.push(idStep(2, 1));
     q.push({
@@ -337,21 +358,17 @@ function buildFN(lc) {
     });
     q.push({ type: "msg", text: "Detektiv schläft ein" });
   }
-  // Dimitri
   for (let k = 0; k < (lc[11] || 0); k++) {
     q.push(idStep(11, 1));
     q.push({ type: "msg", text: "Dimitri schläft ein" });
   }
-  // Scharping
   if (lc[10]) {
     q.push(idStep(10, lc[10]));
     q.push({ type: "msg", text: "Scharping schläft ein" });
   }
-  // Tom & Jerry reveal
   if (lc[15]) q.push(idStep(15, lc[15]));
   if (lc[16]) q.push(idStep(16, lc[16]));
   if (lc[15] && lc[16]) q.push({ type: "tom_jerry_reveal" });
-  // Passive passive
   if (lc[9]) {
     q.push(idStep(9, lc[9]));
     q.push({ type: "msg", text: "Gärtner schläft ein" });
@@ -364,7 +381,6 @@ function buildFN(lc) {
     q.push(idStep(17, lc[17]));
     q.push({ type: "msg", text: "Philosoph schläft ein" });
   }
-
   q.push({
     type: "fn_end",
     text: "🌅 Erste Nacht endet",
@@ -373,9 +389,12 @@ function buildFN(lc) {
   return q;
 }
 
-function buildN(lc) {
+function buildN(lc, strengths = {}) {
   const q = [{ type: "msg", text: "🌙 Nacht", sub: "Das Dorf schläft ein..." }];
-  const mafCount = (lc[1] || 0) + (lc[13] || 0) + (lc[18] || 0);
+  // Terrorist stark = wakes with mafia, schwach = doesn't
+  const terrJoinsMafia = lc[18] && strengths[18] !== "schwach";
+  const mafCount =
+    (lc[1] || 0) + (lc[13] || 0) + (terrJoinsMafia ? lc[18] || 0 : 0);
   if (mafCount) {
     q.push({ type: "msg", text: "Die Mafia öffnet die Augen" });
     q.push({
@@ -418,6 +437,18 @@ function buildN(lc) {
       effect: "prost_freier",
     });
     q.push({ type: "msg", text: "Prostituierte schläft ein" });
+  }
+  // Wanderamor — folgende Nächte wie Prostituierte
+  if (lc[4]) {
+    q.push({ type: "msg", text: "Wanderamor öffnet die Augen" });
+    q.push({
+      type: "sel",
+      count: 1,
+      text: "Wanderamor wählt Freier",
+      sub: "Bei wem verbringt sie diese Nacht?",
+      effect: "wanderamor_freier",
+    });
+    q.push({ type: "msg", text: "Wanderamor schläft ein" });
   }
   if (lc[7]) {
     q.push({ type: "msg", text: "Seelenretter öffnet die Augen" });
@@ -788,201 +819,141 @@ const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700&family=Cinzel:wght@400;600;700&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap');
 
 :root {
-  --bg:        #0c0b0e;
-  --bg2:       #110f0d;
-  --bg3:       #0f0e0c;
-  --border:    #1a1610;
-  --border2:   #201a10;
-  --text:      #e0cfa8;
-  --text-dim:  #7a6a4a;
-  --text-muted:#3d3020;
-  --text-faint:#2a2018;
-  --gold:      #C9A040;
-  --gold-dim:  rgba(201,160,64,.11);
-  --red:       #8B1A1A;
-  --red2:      #a82020;
-  --green:     #4a9a6a;
-  --purple:    #aa60cc;
-  --blue:      #4a7adc;
-  --night-bg:  #0d0c14;
-  --night-b:   #1a1826;
-  --night-g:   rgba(42,36,96,.85);
-  --day-bg:    #100e0c;
-  --day-b:     #1c1408;
-  --day-g:     rgba(139,26,26,.45);
-  --warn-bg:   #1a1208;
-  --warn-bdr:  #3a2808;
-  --watch-bg:  #080c18;
-  --watch-bdr: #0a1830;
+  --bg:#0c0b0e;--bg2:#110f0d;--bg3:#0f0e0c;--border:#1a1610;--border2:#201a10;
+  --text:#e0cfa8;--text-dim:#7a6a4a;--text-muted:#3d3020;--text-faint:#2a2018;
+  --gold:#C9A040;--gold-dim:rgba(201,160,64,.11);--red:#8B1A1A;--red2:#a82020;
+  --green:#4a9a6a;--purple:#aa60cc;--blue:#4a7adc;
+  --night-bg:#0d0c14;--night-b:#1a1826;--night-g:rgba(42,36,96,.85);
+  --day-bg:#100e0c;--day-b:#1c1408;--day-g:rgba(139,26,26,.45);
+  --warn-bg:#1a1208;--warn-bdr:#3a2808;--watch-bg:#080c18;--watch-bdr:#0a1830;
 }
-@media (prefers-color-scheme: light) {
+@media (prefers-color-scheme:light) {
   :root {
-    --bg:        #f2ede0;
-    --bg2:       #e8e2d4;
-    --bg3:       #f8f3e8;
-    --border:    #c8b890;
-    --border2:   #b8a878;
-    --text:      #2a1e08;
-    --text-dim:  #5a4a2a;
-    --text-muted:#8a7a56;
-    --text-faint:#a09068;
-    --gold:      #8a6010;
-    --gold-dim:  rgba(138,96,16,.12);
-    --red:       #8B1A1A;
-    --red2:      #a82020;
-    --green:     #2a6a3a;
-    --purple:    #7a2a9a;
-    --blue:      #1a4aaa;
-    --night-bg:  #e8e4f2;
-    --night-b:   #b0a8d0;
-    --night-g:   rgba(80,60,150,.35);
-    --day-bg:    #f5ece0;
-    --day-b:     #c8a880;
-    --day-g:     rgba(139,26,26,.28);
-    --warn-bg:   #fff8e8;
-    --warn-bdr:  #d4b060;
-    --watch-bg:  #e8f0f8;
-    --watch-bdr: #90b8d8;
+    --bg:#f2ede0;--bg2:#e8e2d4;--bg3:#f8f3e8;--border:#c8b890;--border2:#b8a878;
+    --text:#2a1e08;--text-dim:#5a4a2a;--text-muted:#8a7a56;--text-faint:#a09068;
+    --gold:#8a6010;--gold-dim:rgba(138,96,16,.12);--red:#8B1A1A;--red2:#a82020;
+    --green:#2a6a3a;--purple:#7a2a9a;--blue:#1a4aaa;
+    --night-bg:#e8e4f2;--night-b:#b0a8d0;--night-g:rgba(80,60,150,.35);
+    --day-bg:#f5ece0;--day-b:#c8a880;--day-g:rgba(139,26,26,.28);
+    --warn-bg:#fff8e8;--warn-bdr:#d4b060;--watch-bg:#e8f0f8;--watch-bdr:#90b8d8;
   }
 }
-
-*,*::before,*::after { box-sizing:border-box; margin:0; padding:0 }
-body { background:var(--bg); }
-
-@keyframes fadeSlide { from { opacity:0; transform:translateY(10px) } to { opacity:1; transform:translateY(0) } }
-@keyframes fadeIn    { from { opacity:0 } to { opacity:1 } }
-@keyframes bounceIn  { from { opacity:0; transform:scale(.78) } to { opacity:1; transform:scale(1) } }
-@keyframes pulse     { 0%,100%{opacity:1} 50%{opacity:.5} }
-@keyframes shimmer   { 0%{opacity:.6} 50%{opacity:1} 100%{opacity:.6} }
-
-.ma { min-height:100vh; background:var(--bg); color:var(--text); font-family:'EB Garamond',Georgia,serif; font-size:17px; line-height:1.5; animation:fadeIn .4s ease; }
-
-/* Setup */
-.setup { max-width:720px; margin:0 auto; padding:40px 20px 80px; }
-.h1 { font-family:'Cinzel Decorative',serif; font-size:2.4rem; color:var(--gold); text-align:center; letter-spacing:.04em; text-shadow:0 0 60px rgba(201,160,64,.18); margin-bottom:3px; }
-.h1s { font-family:'Cinzel',serif; font-size:.6rem; letter-spacing:.4em; text-transform:uppercase; color:var(--text-faint); text-align:center; margin-bottom:36px; }
-.sdots { display:flex; gap:10px; justify-content:center; margin-bottom:26px; }
-.sdot { width:8px; height:8px; border-radius:50%; background:var(--border2); border:1px solid var(--border); transition:all .3s; }
-.sdot.act { background:var(--gold); border-color:var(--gold); box-shadow:0 0 10px rgba(201,160,64,.28); }
-
-.card { background:var(--bg2); border:1px solid var(--border); border-radius:3px; padding:20px; margin-bottom:12px; position:relative; animation:fadeSlide .3s ease; }
-.card::before { content:''; position:absolute; top:0; left:20%; right:20%; height:1px; background:linear-gradient(90deg,transparent,rgba(201,160,64,.18),transparent); }
-.ct { font-family:'Cinzel',serif; font-size:.58rem; letter-spacing:.28em; text-transform:uppercase; color:var(--gold); opacity:.5; margin-bottom:11px; }
-
-.cgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(145px,1fr)); gap:5px; }
-.crow { display:flex; flex-direction:column; background:var(--bg3); border:1px solid var(--border); border-radius:2px; padding:6px 9px; gap:2px; }
-.crow-top { display:flex; align-items:center; width:100%; }
-.cn { font-size:.8rem; flex:1; min-width:0; }
-.cdesc { font-size:.6rem; color:var(--text-faint); font-style:italic; line-height:1.25; }
-.cnt { display:flex; align-items:center; gap:3px; flex-shrink:0; }
-.cbt { width:19px; height:19px; background:transparent; border:1px solid var(--border2); color:var(--text-faint); border-radius:2px; cursor:pointer; font-size:.8rem; display:flex; align-items:center; justify-content:center; transition:all .18s; }
-.cbt:hover { border-color:var(--gold); color:var(--gold); }
-.cv { min-width:16px; text-align:center; font-family:'Cinzel',serif; color:var(--gold); font-size:.8rem; }
-
-.trow { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
-.tlbl { font-size:.86rem; color:var(--text-dim); }
-.tog { width:38px; height:20px; background:var(--border2); border:1px solid var(--border); border-radius:10px; cursor:pointer; position:relative; transition:all .25s; }
-.tog.on { background:var(--red); border-color:var(--red); }
-.tok { position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%; background:var(--text-faint); transition:all .25s; }
-.tog.on .tok { left:20px; background:var(--text); }
-
-.srow { display:flex; gap:10px; justify-content:center; margin-top:6px; }
-.prevbtn { background:transparent; border:1px solid var(--border2); color:var(--text-muted); padding:10px 26px; border-radius:2px; cursor:pointer; font-family:'Cinzel',serif; font-size:.74rem; letter-spacing:.12em; text-transform:uppercase; transition:all .22s; }
-.prevbtn:hover { border-color:var(--gold); color:var(--gold); }
-.startbtn { padding:10px 34px; background:var(--red); border:1px solid var(--red); color:var(--text); font-family:'Cinzel',serif; font-size:.76rem; letter-spacing:.14em; text-transform:uppercase; border-radius:2px; cursor:pointer; transition:all .28s; }
-.startbtn:hover:not(:disabled) { background:var(--red2); box-shadow:0 0 28px rgba(139,26,26,.28); }
-.startbtn:disabled { opacity:.22; cursor:not-allowed; }
-
-/* Game Layout */
-.game { display:grid; grid-template-columns:1fr 212px; min-height:100vh; max-width:1020px; margin:0 auto; padding:13px; gap:13px; }
-@media(max-width:620px) { .game { grid-template-columns:1fr; } }
-.ghead { grid-column:1/-1; display:flex; align-items:center; justify-content:space-between; padding-bottom:10px; border-bottom:1px solid var(--border); }
-.gtitle { font-family:'Cinzel Decorative',serif; font-size:1.2rem; color:var(--gold); }
-.rndbdg { font-family:'Cinzel',serif; font-size:.58rem; letter-spacing:.24em; text-transform:uppercase; color:var(--text-faint); border:1px solid var(--border); padding:3px 9px; border-radius:2px; }
-.gbtn { background:transparent; border:1px solid var(--border2); color:var(--text-muted); padding:5px 12px; border-radius:2px; cursor:pointer; font-family:'Cinzel',serif; font-size:.6rem; letter-spacing:.1em; text-transform:uppercase; transition:all .18s; }
-.gbtn:hover { border-color:var(--gold); color:var(--gold); }
-
-.main { display:flex; flex-direction:column; gap:11px; }
-
-/* Step Card */
-.stepcard { background:var(--bg2); border:1px solid var(--border); border-radius:3px; padding:20px 18px; text-align:center; position:relative; }
-.stepcard.anim { animation:fadeSlide .28s ease; }
-.night { background:var(--night-bg) !important; border-color:var(--night-b) !important; }
-.night::after { content:''; position:absolute; top:0; left:15%; right:15%; height:1px; background:linear-gradient(90deg,transparent,var(--night-g),transparent); }
-.day { background:var(--day-bg) !important; border-color:var(--day-b) !important; }
-.day::after { content:''; position:absolute; top:0; left:15%; right:15%; height:1px; background:linear-gradient(90deg,transparent,var(--day-g),transparent); }
-.sicon { font-size:2rem; margin-bottom:5px; display:block; }
-.stitle { font-family:'Cinzel',serif; font-size:1.2rem; color:var(--gold); margin-bottom:3px; }
-.ssub { color:var(--text-muted); font-style:italic; font-size:.9rem; }
-
-.tnum { font-family:'Cinzel Decorative',serif; font-size:2.8rem; color:var(--gold); text-shadow:0 0 40px rgba(201,160,64,.22); padding:5px 0; }
-.tnum.low { animation:pulse .8s infinite; color:var(--red2); }
-.tbar { height:2px; background:var(--border2); border-radius:1px; margin:3px 0; overflow:hidden; }
-.tfill { height:100%; background:linear-gradient(90deg,var(--red),var(--gold)); transition:width 1s linear; }
-.skipbtn { background:transparent; border:1px solid var(--border2); color:var(--text-muted); padding:4px 16px; border-radius:2px; cursor:pointer; font-family:'Cinzel',serif; font-size:.6rem; letter-spacing:.1em; text-transform:uppercase; margin-top:5px; transition:all .18s; display:inline-block; }
-.skipbtn:hover { border-color:var(--gold); color:var(--gold); }
-
-.cfwrap { display:flex; justify-content:center; padding-top:2px; }
-.cfbtn { background:var(--red); border:1px solid var(--red); color:var(--text); padding:9px 38px; border-radius:2px; cursor:pointer; font-family:'Cinzel',serif; font-size:.74rem; letter-spacing:.14em; text-transform:uppercase; transition:all .22s; }
-.cfbtn:hover:not(:disabled) { background:var(--red2); box-shadow:0 0 20px rgba(139,26,26,.28); }
-.cfbtn:disabled { opacity:.2; cursor:not-allowed; }
-
-.daybtnrow { display:flex; flex-direction:column; gap:5px; margin-top:8px; }
-.daybtn { background:transparent; border:1px solid var(--border2); color:var(--text-dim); padding:7px 14px; border-radius:2px; cursor:pointer; font-family:'Cinzel',serif; font-size:.64rem; letter-spacing:.09em; text-transform:uppercase; transition:all .2s; text-align:left; }
-.daybtn:hover { border-color:var(--gold); color:var(--gold); }
-.daybtn.used { opacity:.2; cursor:not-allowed; }
-
-/* Sidebar */
-.sidebar { display:flex; flex-direction:column; gap:11px; }
-.sc { background:var(--bg3); border:1px solid var(--border); border-radius:3px; padding:11px; animation:fadeSlide .4s ease; }
-.sct { font-family:'Cinzel',serif; font-size:.53rem; letter-spacing:.22em; text-transform:uppercase; color:var(--text-faint); margin-bottom:7px; }
-
-.ai { display:flex; align-items:flex-start; justify-content:space-between; padding:3px 0; border-bottom:1px solid var(--border); gap:3px; transition:opacity .3s; }
-.adot { width:5px; height:5px; border-radius:50%; margin-right:4px; flex-shrink:0; margin-top:6px; transition:background .3s; }
-.atxt { flex:1; min-width:0; }
-.aname { font-size:.76rem; color:var(--text-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.arole { font-size:.63rem; font-style:italic; margin-top:1px; }
-.dtag { font-family:'Cinzel',serif; font-size:.48rem; letter-spacing:.05em; text-transform:uppercase; color:var(--gold); border:1px solid var(--warn-bdr); padding:1px 3px; border-radius:2px; flex-shrink:0; align-self:center; }
-.kickbtn { background:transparent; border:none; color:var(--border2); font-size:.74rem; cursor:pointer; padding:1px 2px; border-radius:2px; transition:color .18s; flex-shrink:0; line-height:1; align-self:center; }
-.kickbtn:hover { color:var(--red); }
-
-.logscroll { max-height:180px; overflow-y:auto; }
-.le { font-size:.71rem; color:var(--text-faint); padding:2px 0; border-bottom:1px solid var(--border); font-style:italic; }
-.le:first-child { color:var(--text-dim); }
-.le0 { font-size:.71rem; color:var(--border2); font-style:italic; }
-
-.watchscroll { max-height:150px; overflow-y:auto; }
-.we { font-size:.71rem; padding:3px 0; border-bottom:1px solid var(--border); display:flex; gap:5px; align-items:flex-start; }
-.wtag { font-family:'Cinzel',serif; font-size:.49rem; letter-spacing:.07em; text-transform:uppercase; padding:1px 4px; border-radius:2px; flex-shrink:0; margin-top:2px; }
-
-/* Overlays */
-.overlay { position:fixed; inset:0; background:rgba(0,0,0,.88); display:flex; align-items:center; justify-content:center; z-index:200; backdrop-filter:blur(8px); animation:fadeIn .18s ease; }
-@media (prefers-color-scheme: light) { .overlay { background:rgba(30,20,10,.75); } }
-.rcard { background:var(--bg2); border:1px solid var(--border2); border-radius:3px; padding:36px; text-align:center; max-width:360px; width:90%; animation:bounceIn .28s cubic-bezier(.34,1.56,.64,1); }
-.ri   { font-size:2.8rem; margin-bottom:8px; }
-.rn   { font-family:'Cinzel',serif; font-size:.84rem; color:var(--text-muted); margin-bottom:2px; }
-.rr   { font-family:'Cinzel',serif; font-size:1.5rem; margin-bottom:3px; }
-.rp   { font-size:.86rem; font-style:italic; color:var(--text-muted); margin-bottom:18px; }
-.rg   { color:var(--green); }
-.re   { color:var(--red2); }
-.rt   { color:var(--purple); }
-.rb   { color:var(--blue); }
-
-.msel-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(72px,1fr)); gap:5px; margin:10px 0 6px; }
-.msel-seat { background:var(--bg3); border:1px solid var(--border); border-radius:2px; padding:7px 4px; text-align:center; cursor:pointer; transition:all .18s; font-size:.78rem; color:var(--text-dim); }
-.msel-seat:hover:not(.dead) { border-color:var(--gold); color:var(--gold); }
-.msel-seat.sel { border-color:var(--gold); background:var(--gold-dim); color:var(--gold); }
-.msel-seat.dead { opacity:.12; cursor:not-allowed; }
-.mathresult { background:var(--bg3); border:1px solid var(--border2); border-radius:2px; padding:10px; margin:8px 0; font-family:'Cinzel',serif; font-size:1.1rem; color:var(--gold); text-align:center; animation:bounceIn .25s ease; }
-
-/* Win */
-.win { min-height:100vh; display:flex; align-items:center; justify-content:center; text-align:center; padding:40px; animation:fadeIn .5s ease; }
-.wt  { font-family:'Cinzel Decorative',serif; font-size:2.2rem; margin-bottom:9px; }
-.wv  { color:var(--green); text-shadow:0 0 50px rgba(74,154,106,.28); }
-.wm  { color:var(--red2); text-shadow:0 0 50px rgba(139,26,26,.38); }
-.wtr { color:var(--purple); text-shadow:0 0 50px rgba(170,96,204,.32); }
-.wbl { color:var(--blue); text-shadow:0 0 50px rgba(74,122,220,.3); }
-.ws  { font-size:.94rem; color:var(--text-muted); margin-bottom:24px; font-style:italic; }
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);}
+@keyframes fadeSlide{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes bounceIn{from{opacity:0;transform:scale(.78)}to{opacity:1;transform:scale(1)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.ma{min-height:100vh;background:var(--bg);color:var(--text);font-family:'EB Garamond',Georgia,serif;font-size:17px;line-height:1.5;animation:fadeIn .4s ease;}
+.setup{max-width:720px;margin:0 auto;padding:40px 20px 80px;}
+.h1{font-family:'Cinzel Decorative',serif;font-size:2.4rem;color:var(--gold);text-align:center;letter-spacing:.04em;text-shadow:0 0 60px rgba(201,160,64,.18);margin-bottom:3px;}
+.h1s{font-family:'Cinzel',serif;font-size:.6rem;letter-spacing:.4em;text-transform:uppercase;color:var(--text-faint);text-align:center;margin-bottom:36px;}
+.sdots{display:flex;gap:10px;justify-content:center;margin-bottom:26px;}
+.sdot{width:8px;height:8px;border-radius:50%;background:var(--border2);border:1px solid var(--border);transition:all .3s;}
+.sdot.act{background:var(--gold);border-color:var(--gold);box-shadow:0 0 10px rgba(201,160,64,.28);}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:3px;padding:20px;margin-bottom:12px;position:relative;animation:fadeSlide .3s ease;}
+.card::before{content:'';position:absolute;top:0;left:20%;right:20%;height:1px;background:linear-gradient(90deg,transparent,rgba(201,160,64,.18),transparent);}
+.ct{font-family:'Cinzel',serif;font-size:.58rem;letter-spacing:.28em;text-transform:uppercase;color:var(--gold);opacity:.5;margin-bottom:11px;}
+.cgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:5px;}
+.crow{display:flex;flex-direction:column;background:var(--bg3);border:1px solid var(--border);border-radius:2px;padding:6px 9px;gap:2px;}
+.crow-top{display:flex;align-items:center;width:100%;}
+.cn{font-size:.8rem;flex:1;min-width:0;}
+.cdesc{font-size:.6rem;color:var(--text-faint);font-style:italic;line-height:1.25;}
+.csk{display:flex;align-items:center;gap:5px;margin-top:4px;}
+.csk-label{font-size:.55rem;color:var(--text-faint);}
+.csk-btn{font-size:.56rem;padding:2px 7px;background:transparent;border:1px solid;border-radius:2px;cursor:pointer;transition:all .18s;font-family:'Cinzel',serif;}
+.csk-btn.stark{border-color:var(--gold);color:var(--gold);}
+.csk-btn.schwach{border-color:var(--border2);color:var(--text-muted);}
+.cnt{display:flex;align-items:center;gap:3px;flex-shrink:0;}
+.cbt{width:19px;height:19px;background:transparent;border:1px solid var(--border2);color:var(--text-faint);border-radius:2px;cursor:pointer;font-size:.8rem;display:flex;align-items:center;justify-content:center;transition:all .18s;}
+.cbt:hover{border-color:var(--gold);color:var(--gold);}
+.cv{min-width:16px;text-align:center;font-family:'Cinzel',serif;color:var(--gold);font-size:.8rem;}
+.trow{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+.tlbl{font-size:.86rem;color:var(--text-dim);}
+.tog{width:38px;height:20px;background:var(--border2);border:1px solid var(--border);border-radius:10px;cursor:pointer;position:relative;transition:all .25s;}
+.tog.on{background:var(--red);border-color:var(--red);}
+.tok{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--text-faint);transition:all .25s;}
+.tog.on .tok{left:20px;background:var(--text);}
+.srow{display:flex;gap:10px;justify-content:center;margin-top:6px;}
+.prevbtn{background:transparent;border:1px solid var(--border2);color:var(--text-muted);padding:10px 26px;border-radius:2px;cursor:pointer;font-family:'Cinzel',serif;font-size:.74rem;letter-spacing:.12em;text-transform:uppercase;transition:all .22s;}
+.prevbtn:hover{border-color:var(--gold);color:var(--gold);}
+.startbtn{padding:10px 34px;background:var(--red);border:1px solid var(--red);color:var(--text);font-family:'Cinzel',serif;font-size:.76rem;letter-spacing:.14em;text-transform:uppercase;border-radius:2px;cursor:pointer;transition:all .28s;}
+.startbtn:hover:not(:disabled){background:var(--red2);box-shadow:0 0 28px rgba(139,26,26,.28);}
+.startbtn:disabled{opacity:.22;cursor:not-allowed;}
+.game{display:grid;grid-template-columns:1fr 212px;min-height:100vh;max-width:1020px;margin:0 auto;padding:13px;gap:13px;}
+@media(max-width:620px){.game{grid-template-columns:1fr;}}
+.ghead{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;padding-bottom:10px;border-bottom:1px solid var(--border);}
+.gtitle{font-family:'Cinzel Decorative',serif;font-size:1.2rem;color:var(--gold);}
+.rndbdg{font-family:'Cinzel',serif;font-size:.58rem;letter-spacing:.24em;text-transform:uppercase;color:var(--text-faint);border:1px solid var(--border);padding:3px 9px;border-radius:2px;}
+.gbtn{background:transparent;border:1px solid var(--border2);color:var(--text-muted);padding:5px 12px;border-radius:2px;cursor:pointer;font-family:'Cinzel',serif;font-size:.6rem;letter-spacing:.1em;text-transform:uppercase;transition:all .18s;}
+.gbtn:hover{border-color:var(--gold);color:var(--gold);}
+.main{display:flex;flex-direction:column;gap:11px;}
+.stepcard{background:var(--bg2);border:1px solid var(--border);border-radius:3px;padding:20px 18px;text-align:center;position:relative;}
+.stepcard.anim{animation:fadeSlide .28s ease;}
+.night{background:var(--night-bg)!important;border-color:var(--night-b)!important;}
+.night::after{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;background:linear-gradient(90deg,transparent,var(--night-g),transparent);}
+.day{background:var(--day-bg)!important;border-color:var(--day-b)!important;}
+.day::after{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;background:linear-gradient(90deg,transparent,var(--day-g),transparent);}
+.sicon{font-size:2rem;margin-bottom:5px;display:block;}
+.stitle{font-family:'Cinzel',serif;font-size:1.2rem;color:var(--gold);margin-bottom:3px;}
+.ssub{color:var(--text-muted);font-style:italic;font-size:.9rem;}
+.tnum{font-family:'Cinzel Decorative',serif;font-size:2.8rem;color:var(--gold);text-shadow:0 0 40px rgba(201,160,64,.22);padding:5px 0;}
+.tnum.low{animation:pulse .8s infinite;color:var(--red2);}
+.tbar{height:2px;background:var(--border2);border-radius:1px;margin:3px 0;overflow:hidden;}
+.tfill{height:100%;background:linear-gradient(90deg,var(--red),var(--gold));transition:width 1s linear;}
+.skipbtn{background:transparent;border:1px solid var(--border2);color:var(--text-muted);padding:4px 16px;border-radius:2px;cursor:pointer;font-family:'Cinzel',serif;font-size:.6rem;letter-spacing:.1em;text-transform:uppercase;margin-top:5px;transition:all .18s;display:inline-block;}
+.skipbtn:hover{border-color:var(--gold);color:var(--gold);}
+.cfwrap{display:flex;justify-content:center;padding-top:2px;}
+.cfbtn{background:var(--red);border:1px solid var(--red);color:var(--text);padding:9px 38px;border-radius:2px;cursor:pointer;font-family:'Cinzel',serif;font-size:.74rem;letter-spacing:.14em;text-transform:uppercase;transition:all .22s;}
+.cfbtn:hover:not(:disabled){background:var(--red2);box-shadow:0 0 20px rgba(139,26,26,.28);}
+.cfbtn:disabled{opacity:.2;cursor:not-allowed;}
+.daybtnrow{display:flex;flex-direction:column;gap:5px;margin-top:8px;}
+.daybtn{background:transparent;border:1px solid var(--border2);color:var(--text-dim);padding:7px 14px;border-radius:2px;cursor:pointer;font-family:'Cinzel',serif;font-size:.64rem;letter-spacing:.09em;text-transform:uppercase;transition:all .2s;text-align:left;}
+.daybtn:hover{border-color:var(--gold);color:var(--gold);}
+.daybtn.used{opacity:.2;cursor:not-allowed;}
+.terr-ui{display:flex;flex-direction:column;align-items:center;gap:10px;padding:10px 0;}
+.terr-hint{color:var(--text-muted);font-style:italic;font-size:.88rem;}
+.terr-target{font-family:'Cinzel',serif;font-size:.9rem;color:var(--gold);min-height:1.2em;}
+.terr-btns{display:flex;gap:10px;}
+.sidebar{display:flex;flex-direction:column;gap:11px;}
+.sc{background:var(--bg3);border:1px solid var(--border);border-radius:3px;padding:11px;animation:fadeSlide .4s ease;}
+.sct{font-family:'Cinzel',serif;font-size:.53rem;letter-spacing:.22em;text-transform:uppercase;color:var(--text-faint);margin-bottom:7px;}
+.ai{display:flex;align-items:flex-start;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--border);gap:3px;transition:opacity .3s;}
+.adot{width:5px;height:5px;border-radius:50%;margin-right:4px;flex-shrink:0;margin-top:6px;transition:background .3s;}
+.atxt{flex:1;min-width:0;}
+.aname{font-size:.76rem;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.arole{font-size:.63rem;font-style:italic;margin-top:1px;}
+.dtag{font-family:'Cinzel',serif;font-size:.48rem;letter-spacing:.05em;text-transform:uppercase;color:var(--gold);border:1px solid var(--warn-bdr);padding:1px 3px;border-radius:2px;flex-shrink:0;align-self:center;}
+.kickbtn{background:transparent;border:none;color:var(--border2);font-size:.74rem;cursor:pointer;padding:1px 2px;border-radius:2px;transition:color .18s;flex-shrink:0;line-height:1;align-self:center;}
+.kickbtn:hover{color:var(--red);}
+.logscroll{max-height:180px;overflow-y:auto;}
+.le{font-size:.71rem;color:var(--text-faint);padding:2px 0;border-bottom:1px solid var(--border);font-style:italic;}
+.le:first-child{color:var(--text-dim);}
+.le0{font-size:.71rem;color:var(--border2);font-style:italic;}
+.watchscroll{max-height:150px;overflow-y:auto;}
+.we{font-size:.71rem;padding:3px 0;border-bottom:1px solid var(--border);display:flex;gap:5px;align-items:flex-start;}
+.wtag{font-family:'Cinzel',serif;font-size:.49rem;letter-spacing:.07em;text-transform:uppercase;padding:1px 4px;border-radius:2px;flex-shrink:0;margin-top:2px;}
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.88);display:flex;align-items:center;justify-content:center;z-index:200;backdrop-filter:blur(8px);animation:fadeIn .18s ease;}
+@media(prefers-color-scheme:light){.overlay{background:rgba(30,20,10,.75);}}
+.rcard{background:var(--bg2);border:1px solid var(--border2);border-radius:3px;padding:36px;text-align:center;max-width:360px;width:90%;animation:bounceIn .28s cubic-bezier(.34,1.56,.64,1);}
+.ri{font-size:2.8rem;margin-bottom:8px;}
+.rn{font-family:'Cinzel',serif;font-size:.84rem;color:var(--text-muted);margin-bottom:2px;}
+.rr{font-family:'Cinzel',serif;font-size:1.5rem;margin-bottom:3px;}
+.rp{font-size:.86rem;font-style:italic;color:var(--text-muted);margin-bottom:18px;}
+.rg{color:var(--green)}.re{color:var(--red2)}.rt{color:var(--purple)}.rb{color:var(--blue)}
+.msel-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(72px,1fr));gap:5px;margin:10px 0 6px;}
+.msel-seat{background:var(--bg3);border:1px solid var(--border);border-radius:2px;padding:7px 4px;text-align:center;cursor:pointer;transition:all .18s;font-size:.78rem;color:var(--text-dim);}
+.msel-seat:hover:not(.dead){border-color:var(--gold);color:var(--gold);}
+.msel-seat.sel{border-color:var(--gold);background:var(--gold-dim);color:var(--gold);}
+.msel-seat.dead{opacity:.12;cursor:not-allowed;}
+.mathresult{background:var(--bg3);border:1px solid var(--border2);border-radius:2px;padding:10px;margin:8px 0;font-family:'Cinzel',serif;font-size:1.1rem;color:var(--gold);text-align:center;animation:bounceIn .25s ease;}
+.win{min-height:100vh;display:flex;align-items:center;justify-content:center;text-align:center;padding:40px;animation:fadeIn .5s ease;}
+.wt{font-family:'Cinzel Decorative',serif;font-size:2.2rem;margin-bottom:9px;}
+.wv{color:var(--green);text-shadow:0 0 50px rgba(74,154,106,.28);}
+.wm{color:var(--red2);text-shadow:0 0 50px rgba(139,26,26,.38);}
+.wtr{color:var(--purple);text-shadow:0 0 50px rgba(170,96,204,.32);}
+.wbl{color:var(--blue);text-shadow:0 0 50px rgba(74,122,220,.3);}
+.ws{font-size:.94rem;color:var(--text-muted);margin-bottom:24px;font-style:italic;}
 `;
 
 // ─── App ──────────────────────────────────────────────────────────────────────
@@ -992,6 +963,9 @@ export default function App() {
     Object.fromEntries(
       CHARS.map((_, i) => [i, i === 0 ? 3 : i === 1 ? 2 : i === 12 ? 1 : 0]),
     ),
+  );
+  const [strengthModes, setStrengthModes] = useState(() =>
+    Object.fromEntries(STARK_CHARS.map((i) => [i, "stark"])),
   );
   const [seatNames, setSeatNames] = useState([]);
   const [useDictator, setUseDictator] = useState(true);
@@ -1015,7 +989,8 @@ export default function App() {
   const [terrUsed, setTerrUsed] = useState(false);
   const [mathSel, setMathSel] = useState([]);
   const [mathResult, setMathResult] = useState(null);
-  const [terrSel, setTerrSel] = useState(null);
+  // Terrorist mode: use circle for target selection
+  const [terrMode, setTerrMode] = useState(false);
   const timerRef = useRef(null);
 
   const numPlayers = Object.values(counts).reduce((s, c) => s + c, 0);
@@ -1055,7 +1030,6 @@ export default function App() {
     setDictSeat(G.current.dictSeat);
   };
 
-  // ── kill a player, return death info (or null if already dead)
   const killSeat = (i, g) => {
     const ri = g.roles[i];
     if (ri === null || ri === false) return null;
@@ -1070,7 +1044,6 @@ export default function App() {
     };
   };
 
-  // ── kick a player from the game (leaves voluntarily)
   const kickPlayer = (i) => {
     const g = G.current;
     if (!g) return;
@@ -1088,7 +1061,6 @@ export default function App() {
     }
   };
 
-  // ── show death overlays sequentially, call afterFn when done
   const showDeaths = (list, afterFn) => {
     if (!list.length) {
       afterFn();
@@ -1107,7 +1079,6 @@ export default function App() {
     next();
   };
 
-  // ── process lover chain deaths and Tom/Jerry wins
   const processLoverDeaths = (g, deadSeats) => {
     const extra = [];
     if (!g.lovers) return extra;
@@ -1120,7 +1091,7 @@ export default function App() {
         g.roles[partner] === false
       )
         return;
-      if (deadSeats.includes(partner)) return; // already dying
+      if (deadSeats.includes(partner)) return;
       const info = killSeat(partner, g);
       if (info) {
         extra.push({ ...info, isLover: true });
@@ -1130,7 +1101,7 @@ export default function App() {
     return extra;
   };
 
-  // ── handle Tom/Jerry: when one dies the other wins & leaves
+  // Tom/Jerry: other wins and leaves — game continues, no setScreen here
   const handleTomJerry = (g, deadInfos) => {
     let hadEvent = false;
     deadInfos.forEach((d) => {
@@ -1189,6 +1160,13 @@ export default function App() {
       dimitriSilenced: null,
       dimitriDiesNextNight: undefined,
       prostFreier: {},
+      strengths: { ...strengthModes },
+      // Schwach tracking — last used target per role
+      lastProtect: undefined,
+      lastRufmoerd: undefined,
+      lastDimitriSilence: undefined,
+      lastProstFreier: undefined,
+      lastWanderAmorFreier: undefined,
     };
     setRoles([...r]);
     setDictSeat(null);
@@ -1202,8 +1180,8 @@ export default function App() {
     setTerrUsed(false);
     setMathSel([]);
     setMathResult(null);
-    setTerrSel(null);
-    setQueue(buildFN(lc));
+    setTerrMode(false);
+    setQueue(buildFN(lc, strengthModes));
     setQIdx(0);
     setScreen("game");
   };
@@ -1212,6 +1190,7 @@ export default function App() {
     setQueue(buildD(isFirst, useDictator, timerSec));
     setQIdx(0);
     setSelected([]);
+    setTerrMode(false);
     setTerrUsed(false);
   };
 
@@ -1220,9 +1199,10 @@ export default function App() {
     const lc = Object.fromEntries(
       CHARS.map((_, i) => [i, G.current.liveCounts[i] || 0]),
     );
-    setQueue([...extra, ...buildN(lc)]);
+    setQueue([...extra, ...buildN(lc, G.current.strengths)]);
     setQIdx(0);
     setSelected([]);
+    setTerrMode(false);
     setRoundNum((n) => n + 1);
   };
 
@@ -1233,11 +1213,58 @@ export default function App() {
       return g.roles
         .map((r, i) => (r !== false ? i : -1))
         .filter((i) => i !== -1);
-    return g.roles.map((r, i) => (r === null ? i : -1)).filter((i) => i !== -1);
+    const base = g.roles
+      .map((r, i) => (r === null ? i : -1))
+      .filter((i) => i !== -1);
+    const sw = g.strengths || {};
+    const extra = [];
+    if (
+      cur.effect === "protect" &&
+      sw[7] === "schwach" &&
+      g.lastProtect !== undefined
+    )
+      extra.push(g.lastProtect);
+    if (
+      cur.effect === "rufmoerd_mark" &&
+      sw[13] === "schwach" &&
+      g.lastRufmoerd !== undefined
+    )
+      extra.push(g.lastRufmoerd);
+    if (
+      cur.effect === "dimitri_silence" &&
+      sw[11] === "schwach" &&
+      g.lastDimitriSilence !== undefined
+    )
+      extra.push(g.lastDimitriSilence);
+    if (
+      cur.effect === "prost_freier" &&
+      sw[5] === "schwach" &&
+      g.lastProstFreier !== undefined
+    )
+      extra.push(g.lastProstFreier);
+    if (
+      cur.effect === "wanderamor_freier" &&
+      sw[4] === "schwach" &&
+      g.lastWanderAmorFreier !== undefined
+    )
+      extra.push(g.lastWanderAmorFreier);
+    return [...new Set([...base, ...extra])];
+  };
+
+  // Excluded seats for terrorist circle mode
+  const getTerrExcluded = () => {
+    if (!G.current) return [];
+    return G.current.roles
+      .map((r, i) => {
+        const isTerr =
+          r !== null && r !== false && CHARS[r]?.name === "Terrorist";
+        return r === null || isTerr ? i : -1;
+      })
+      .filter((i) => i !== -1);
   };
 
   const canConfirm = () => {
-    if (!cur || overlay) return false;
+    if (!cur || overlay || terrMode) return false;
     if (
       [
         "msg",
@@ -1253,9 +1280,9 @@ export default function App() {
     return selected.length === (cur.count ?? 1);
   };
 
-  // ── MAIN ADVANCE ──────────────────────────────────────────────────────────
+  // ── MAIN ADVANCE ───────────────────────────────────────────────────────────
   const advance = () => {
-    if (!cur || !G.current || overlay) return;
+    if (!cur || !G.current || overlay || terrMode) return;
     const g = G.current;
     const s = selected[0];
     const next = () => {
@@ -1324,31 +1351,29 @@ export default function App() {
         next();
         break;
 
-      // ── DEATHS (morning) ────────────────────────────────────────────────
+      // ── DEATHS (morning) ─────────────────────────────────────────────────
       case "deaths": {
         let kill = [...new Set(g.justDied)].filter(
           (x) => !g.protected.includes(x),
         );
 
-        // 1. Prostituierte logic
+        // Prostituierte + Wanderamor via prostFreier map
         Object.entries(g.prostFreier || {}).forEach(([pStr, freierSeat]) => {
           const pSeat = parseInt(pStr);
           if (g.roles[pSeat] === null) return;
           const pHit = kill.includes(pSeat);
           const fHit = kill.includes(freierSeat);
-          if (pHit) kill = kill.filter((x) => x !== pSeat); // Prost at freier's, survives own attack
-          if (fHit && !kill.includes(pSeat)) kill.push(pSeat); // freier dies → Prost dies with him
+          if (pHit) kill = kill.filter((x) => x !== pSeat);
+          if (fHit && !kill.includes(pSeat)) kill.push(pSeat);
         });
         g.prostFreier = {};
 
-        // 2. Previous Scharping death fires now
         const sPending = g.scharpingDeathPending;
         if (sPending !== undefined) {
           if (g.roles[sPending] !== null && !kill.includes(sPending))
             kill.push(sPending);
           delete g.scharpingDeathPending;
         }
-        // New Scharping hit → survives, flag for next round
         kill
           .filter((x) => {
             const ri = g.roles[x];
@@ -1368,7 +1393,6 @@ export default function App() {
             );
           });
 
-        // 3. Der Andere: first hit = schärfung, second = death
         if (g.derAndereSeat !== -1 && g.roles[g.derAndereSeat] !== null) {
           const da = g.derAndereSeat;
           if (kill.includes(da)) {
@@ -1380,18 +1404,14 @@ export default function App() {
                 "warn",
               );
             }
-            // if already sharpened stays in kill → dies
           }
         }
 
-        // 4. Dimitri deferred death (from previous night flag)
         if (g.dimitriDiesNextNight !== undefined) {
           const ds = g.dimitriDiesNextNight;
           if (g.roles[ds] !== null && !kill.includes(ds)) kill.push(ds);
           delete g.dimitriDiesNextNight;
         }
-
-        // 5. First-day check: if nobody died → Dimitri dies next night
         if (cur.isFirstDay && kill.length === 0) {
           const dSeat = g.roles.findIndex(
             (r, i) => r !== null && r !== false && CHARS[r]?.name === "Dimitri",
@@ -1405,7 +1425,6 @@ export default function App() {
           }
         }
 
-        // Kill everyone in kill list
         const deadInfos = kill.map((x) => killSeat(x, g)).filter(Boolean);
         g.justDied = [];
         syncDisplay();
@@ -1416,7 +1435,6 @@ export default function App() {
             addLog(`☠ ${d.name} (${d.roleName}) gestorben`),
           );
 
-        // Dimitri silence reminder
         if (g.dimitriSilenced !== null && g.roles[g.dimitriSilenced] !== null) {
           addWatch(
             `${pName(g.dimitriSilenced)} muss heute schweigen! (Dimitri-Befehl)`,
@@ -1425,18 +1443,14 @@ export default function App() {
           g.dimitriSilenced = null;
         }
 
-        // Dictator died?
         const wasDictDead =
           useDictator && g.dictSeat !== null && kill.includes(g.dictSeat);
         if (wasDictDead) g.dictSeat = null;
         syncDisplay();
 
-        // Lover chain
         const loverDeaths = processLoverDeaths(g, kill);
         syncDisplay();
         const allDead = [...deadInfos, ...loverDeaths];
-
-        // Tom/Jerry
         handleTomJerry(g, allDead);
 
         const afterDeaths = () => {
@@ -1462,7 +1476,6 @@ export default function App() {
           setSelected([]);
           setQIdx((i) => i + 1);
         };
-
         showDeaths(allDead, afterDeaths);
         break;
       }
@@ -1477,11 +1490,11 @@ export default function App() {
 
           case "protect":
             g.protected = [...new Set([...g.protected, s])];
+            g.lastProtect = s;
             next();
             break;
 
           case "prost_freier": {
-            // find which prostituierte seat we're tracking (by charIdx 5)
             const pSeat = g.roles.findIndex(
               (r, i) =>
                 r !== null &&
@@ -1490,12 +1503,25 @@ export default function App() {
                 !(i in g.prostFreier),
             );
             if (pSeat !== -1) g.prostFreier[pSeat] = s;
+            g.lastProstFreier = s;
+            next();
+            break;
+          }
+
+          case "wanderamor_freier": {
+            const waSeat = g.roles.findIndex(
+              (r, i) =>
+                r !== null && r !== false && CHARS[r]?.name === "Wanderamor",
+            );
+            if (waSeat !== -1) g.prostFreier[waSeat] = s;
+            g.lastWanderAmorFreier = s;
             next();
             break;
           }
 
           case "rufmoerd_mark":
             g.rufmordMarked = s;
+            g.lastRufmoerd = s;
             addLog(`🎭 Rufmörder markiert ${pName(s)} für Detektiv`);
             next();
             break;
@@ -1529,7 +1555,7 @@ export default function App() {
             if (g.rufmordMarked === s) {
               isEvil = true;
               g.rufmordMarked = null;
-            } // mark consumed
+            }
             setOverlay({
               type: "detect",
               name: pName(s),
@@ -1544,6 +1570,7 @@ export default function App() {
 
           case "dimitri_silence":
             g.dimitriSilenced = s;
+            g.lastDimitriSilence = s;
             addLog(`🤐 ${pName(s)} muss morgen schweigen (Dimitri)`);
             next();
             break;
@@ -1552,7 +1579,6 @@ export default function App() {
             g.dictSeat = s;
             syncDisplay();
             addLog(`⚑ ${pName(s)} ist Diktator`);
-            // Kaiser solo win
             const ri = g.roles[s];
             if (ri !== null && ri !== false && CHARS[ri]?.name === "Kaiser") {
               setWinner("kaiser");
@@ -1569,18 +1595,17 @@ export default function App() {
               ri !== null && ri !== false ? CHARS[ri]?.name : "Bürger";
             const partyIdx =
               ri !== null && ri !== false ? (CHARS[ri]?.party ?? 0) : 0;
-
-            // Der Andere: verbannt while geschärft → wins
             const isDerAndereWin =
               g.derAndereSeat === s &&
               g.derAndereSharpened &&
               g.roles[s] !== null;
             const wasDic = useDictator && g.dictSeat === s;
 
-            // const info = killSeat(s, g);
-            // if (wasDic) g.dictSeat = null;
-            // syncDisplay();
-            // addLog(`⚖ ${pName(s)} (${roleName}) wurde verbannt`);
+            // Actually kill the voted player
+            killSeat(s, g);
+            if (wasDic) g.dictSeat = null;
+            syncDisplay();
+            addLog(`⚖ ${pName(s)} (${roleName}) wurde verbannt`);
 
             const loverDeaths = processLoverDeaths(g, [s]);
             syncDisplay();
@@ -1602,20 +1627,16 @@ export default function App() {
                 setScreen("over");
                 return;
               }
-              if (wasDic) {
-                setQueue((prev) => {
-                  const n = [...prev];
-                  n.splice(qIdx + 1, 0, {
-                    type: "sel",
-                    count: 1,
-                    text: `${pName(s)} bestimmt Nachfolger`,
-                    sub: "Als letzte Amtshandlung.",
-                    effect: "dictator",
-                  });
-                  return n;
+              const extra = [];
+              if (wasDic)
+                extra.push({
+                  type: "sel",
+                  count: 1,
+                  text: `${pName(s)} bestimmt Nachfolger`,
+                  sub: "Als letzte Amtshandlung.",
+                  effect: "dictator",
                 });
-              }
-              goNight();
+              goNight(extra);
             });
             break;
           }
@@ -1632,6 +1653,13 @@ export default function App() {
   };
 
   const toggleSeat = (i) => {
+    if (terrMode) {
+      // Terrorist mode: single seat from circle
+      const excl = getTerrExcluded();
+      if (excl.includes(i)) return;
+      setSelected([i]);
+      return;
+    }
     const excl = getExcluded();
     if (excl.includes(i)) return;
     setSelected((p) => {
@@ -1641,7 +1669,7 @@ export default function App() {
     });
   };
 
-  // ── Math overlay commit
+  // ── Math commit
   const commitMath = () => {
     const g = G.current;
     if (!g) return;
@@ -1656,23 +1684,23 @@ export default function App() {
     );
   };
 
-  // ── Terrorist overlay commit
+  // ── Terrorist commit (uses selected[0] from circle)
   const commitTerrorist = () => {
+    const target = selected[0];
     const g = G.current;
-    if (!g || terrSel === null) return;
-    const terrSeat = g.roles.findIndex(
+    if (!g || target === undefined) return;
+    const terrSeatIdx = g.roles.findIndex(
       (r, i) => r !== null && r !== false && CHARS[r]?.name === "Terrorist",
     );
-    const infos = [terrSeat, terrSel]
-      .map((x) => killSeat(x, g))
-      .filter(Boolean);
+    const seats = [terrSeatIdx, target].filter((x) => x !== -1);
+    const infos = seats.map((x) => killSeat(x, g)).filter(Boolean);
     addLog(
       `💣 Terrorist outet sich — ${infos.map((d) => d.name).join(" & ")} sterben`,
     );
     syncDisplay();
     setTerrUsed(true);
-    setOverlay(null);
-    setTerrSel(null);
+    setTerrMode(false);
+    setSelected([]);
     showDeaths(infos, () => {
       const w = checkWin(g);
       if (w) {
@@ -1695,7 +1723,7 @@ export default function App() {
     if (e === "dictator") return "⚑";
     if (e === "vote") return "⚖";
     if (e === "amor_couple") return "💕";
-    if (e === "prost_freier") return "🌹";
+    if (e === "prost_freier" || e === "wanderamor_freier") return "🌹";
     if (e === "rufmoerd_mark") return "🎭";
     if (e === "dimitri_silence") return "🤐";
     if (t === "derAndereStatus") return "🌑";
@@ -1714,12 +1742,13 @@ export default function App() {
         "detect",
         "rufmoerd_mark",
         "prost_freier",
+        "wanderamor_freier",
         "amor_couple",
         "dimitri_silence",
       ].includes(cur?.effect)) ||
     cur?.type === "derAndereStatus" ||
     (cur?.type === "msg" &&
-      /Nacht|schlafen|öffnet|Mafia|Triaden|Rufmörder|Detektiv|Seelenretter|Prostituierte|Amor|Dimitri/.test(
+      /Nacht|schlafen|öffnet|Mafia|Triaden|Rufmörder|Detektiv|Seelenretter|Prostituierte|Wanderamor|Amor|Dimitri/.test(
         cur?.text || "",
       ));
 
@@ -1740,8 +1769,7 @@ export default function App() {
     ) &&
     !terrUsed;
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // SETUP
+  // ── SETUP ──────────────────────────────────────────────────────────────────
   if (screen === "setup")
     return (
       <div className="ma">
@@ -1770,6 +1798,8 @@ export default function App() {
                           : c.party === 3
                             ? "var(--blue)"
                             : "var(--green)";
+                    const isStarkChar = STARK_CHARS.includes(i);
+                    const mode = strengthModes[i] || "stark";
                     return (
                       <div key={i} className="crow">
                         <div className="crow-top">
@@ -1803,6 +1833,31 @@ export default function App() {
                           </div>
                         </div>
                         <div className="cdesc">{c.desc}</div>
+                        {isStarkChar && (
+                          <div className="csk">
+                            <span className="csk-label">Stärke:</span>
+                            <button
+                              className={`csk-btn ${mode}`}
+                              onClick={() =>
+                                setStrengthModes((p) => ({
+                                  ...p,
+                                  [i]: p[i] === "stark" ? "schwach" : "stark",
+                                }))
+                              }
+                            >
+                              {mode === "stark" ? "⚡ Stark" : "💤 Schwach"}
+                            </button>
+                            <span
+                              style={{
+                                fontSize: ".52rem",
+                                color: "var(--text-faint)",
+                                flex: 1,
+                              }}
+                            >
+                              {STARK_LABEL[i][mode]}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -1880,8 +1935,7 @@ export default function App() {
       </div>
     );
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // WIN
+  // ── WIN ────────────────────────────────────────────────────────────────────
   if (screen === "over") {
     const WD = {
       village: {
@@ -1903,16 +1957,6 @@ export default function App() {
         t: "Das Liebespaar gewinnt!",
         s: "Sie waren die letzten — zusammen bis zum Ende.",
         c: "wv",
-      },
-      tom: {
-        t: "Tom gewinnt!",
-        s: "Jerry ist gestorben. Tom hat sein Ziel erreicht.",
-        c: "wbl",
-      },
-      jerry: {
-        t: "Jerry gewinnt!",
-        s: "Tom ist gestorben. Jerry hat sein Ziel erreicht.",
-        c: "wbl",
       },
       kaiser: {
         t: "Der Kaiser gewinnt!",
@@ -1948,13 +1992,14 @@ export default function App() {
     );
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // GAME
+  // ── GAME ───────────────────────────────────────────────────────────────────
+  const circleExcl = terrMode ? getTerrExcluded() : showGrid ? excl : [];
+  const circleToggle = terrMode || showGrid ? toggleSeat : null;
+
   return (
     <div className="ma">
       <style>{CSS}</style>
 
-      {/* ── detect overlay */}
       {overlay?.type === "detect" && (
         <div className="overlay">
           <div className="rcard">
@@ -1970,7 +2015,6 @@ export default function App() {
         </div>
       )}
 
-      {/* ── death overlay */}
       {overlay?.type === "death" && (
         <div className="overlay">
           <div className="rcard">
@@ -1992,7 +2036,6 @@ export default function App() {
         </div>
       )}
 
-      {/* ── Der Andere status */}
       {overlay?.type === "derAndere" && (
         <div className="overlay">
           <div className="rcard">
@@ -2013,7 +2056,6 @@ export default function App() {
         </div>
       )}
 
-      {/* ── Tom & Jerry reveal */}
       {overlay?.type === "tomjerry" && (
         <div className="overlay">
           <div className="rcard">
@@ -2047,7 +2089,6 @@ export default function App() {
         </div>
       )}
 
-      {/* ── Mathematiker overlay */}
       {overlay?.type === "math" && (
         <div className="overlay">
           <div className="rcard" style={{ maxWidth: 420 }}>
@@ -2126,81 +2167,6 @@ export default function App() {
         </div>
       )}
 
-      {/* ── Terrorist overlay */}
-      {overlay?.type === "terrorist" && (
-        <div className="overlay">
-          <div className="rcard" style={{ maxWidth: 420 }}>
-            <div className="ri">💣</div>
-            <div
-              className="stitle"
-              style={{
-                fontFamily: "Cinzel,serif",
-                fontSize: "1.2rem",
-                color: "var(--gold)",
-                marginBottom: 4,
-              }}
-            >
-              Terrorist outet sich
-            </div>
-            <div
-              className="ssub"
-              style={{
-                marginBottom: 10,
-                color: "var(--text-muted)",
-                fontStyle: "italic",
-              }}
-            >
-              Wähle das Ziel — beide sterben
-            </div>
-            <div className="msel-grid">
-              {Array.from({ length: numPlayers }).map((_, i) => {
-                const ri = roles[i];
-                const isTerr =
-                  ri !== null &&
-                  ri !== false &&
-                  CHARS[ri]?.name === "Terrorist";
-                const dead = ri === null || isTerr;
-                return (
-                  <div
-                    key={i}
-                    className={`msel-seat${dead ? " dead" : ""}${terrSel === i ? " sel" : ""}`}
-                    onClick={() => !dead && setTerrSel(i)}
-                  >
-                    {pName(i)}
-                  </div>
-                );
-              })}
-            </div>
-            <div
-              style={{
-                display: "flex",
-                gap: 8,
-                justifyContent: "center",
-                marginTop: 8,
-              }}
-            >
-              <button
-                className="prevbtn"
-                onClick={() => {
-                  setOverlay(null);
-                  setTerrSel(null);
-                }}
-              >
-                Abbrechen
-              </button>
-              <button
-                className="cfbtn"
-                disabled={terrSel === null}
-                onClick={commitTerrorist}
-              >
-                Bestätigen
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Main Game Layout */}
       <div className="game">
         <div className="ghead">
           <div className="gtitle">Mafia</div>
@@ -2216,9 +2182,16 @@ export default function App() {
             className={`stepcard anim ${isNight ? "night" : "day"}`}
           >
             <span className="sicon">{getIcon()}</span>
-            <div className="stitle">{cur?.text || ""}</div>
-            {cur?.sub && <div className="ssub">{cur.sub}</div>}
-            {cur?.type === "timer" && (
+            <div className="stitle">
+              {terrMode ? "💣 Terrorist outet sich" : cur?.text || ""}
+            </div>
+            {!terrMode && cur?.sub && <div className="ssub">{cur.sub}</div>}
+            {terrMode && (
+              <div className="ssub">
+                Wähle das Ziel im Kreis — beide sterben.
+              </div>
+            )}
+            {cur?.type === "timer" && !terrMode && (
               <>
                 <div className={`tnum${timerVal <= 5 ? " low" : ""}`}>
                   {timerVal}
@@ -2242,7 +2215,7 @@ export default function App() {
                 </button>
               </>
             )}
-            {!isNight && (hasMath || hasTerrorist) && (
+            {!terrMode && !isNight && (hasMath || hasTerrorist) && (
               <div className="daybtnrow">
                 {hasMath && (
                   <button
@@ -2260,8 +2233,8 @@ export default function App() {
                   <button
                     className="daybtn"
                     onClick={() => {
-                      setTerrSel(null);
-                      setOverlay({ type: "terrorist" });
+                      setTerrMode(true);
+                      setSelected([]);
                     }}
                   >
                     💣 Terrorist outet sich
@@ -2276,25 +2249,53 @@ export default function App() {
             names={seatNames}
             roles={roles}
             selected={selected}
-            excluded={showGrid ? excl : []}
+            excluded={circleExcl}
             dictSeat={dictSeat}
-            onToggle={showGrid ? toggleSeat : null}
+            onToggle={circleToggle}
             showRoles={showRoles}
             lovers={G.current?.lovers}
           />
 
           <div className="cfwrap">
-            <button
-              className="cfbtn"
-              disabled={!canConfirm()}
-              onClick={advance}
-            >
-              Weiter
-            </button>
+            {terrMode ? (
+              <div className="terr-ui">
+                <div className="terr-hint">Wähle das Ziel im Kreis</div>
+                <div className="terr-target">
+                  {selected[0] !== undefined
+                    ? `Ziel: ${pName(selected[0])}`
+                    : ""}
+                </div>
+                <div className="terr-btns">
+                  <button
+                    className="prevbtn"
+                    onClick={() => {
+                      setTerrMode(false);
+                      setSelected([]);
+                    }}
+                  >
+                    Abbrechen
+                  </button>
+                  <button
+                    className="cfbtn"
+                    disabled={selected.length === 0}
+                    onClick={commitTerrorist}
+                  >
+                    💣 Bestätigen
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                className="cfbtn"
+                disabled={!canConfirm()}
+                onClick={advance}
+              >
+                Weiter
+              </button>
+            )}
           </div>
         </div>
 
-        {/* ── Sidebar */}
         <div className="sidebar">
           <div className="sc">
             <div className="sct">Spieler</div>
