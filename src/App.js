@@ -1033,7 +1033,7 @@ export default function App() {
       setTimerVal(cur.seconds);
       setTimerRunning(true);
     }
-  }, [qIdx]);
+  }, [qIdx, cur?.type, cur?.seconds]);
 
   useEffect(() => {
     if (!timerRunning) return;
@@ -1577,10 +1577,10 @@ export default function App() {
               g.roles[s] !== null;
             const wasDic = useDictator && g.dictSeat === s;
 
-            const info = killSeat(s, g);
-            if (wasDic) g.dictSeat = null;
-            syncDisplay();
-            addLog(`⚖ ${pName(s)} (${roleName}) wurde verbannt`);
+            // const info = killSeat(s, g);
+            // if (wasDic) g.dictSeat = null;
+            // syncDisplay();
+            // addLog(`⚖ ${pName(s)} (${roleName}) wurde verbannt`);
 
             const loverDeaths = processLoverDeaths(g, [s]);
             syncDisplay();
@@ -1619,6 +1619,9 @@ export default function App() {
             });
             break;
           }
+
+          default:
+            break;
         }
         break;
 
